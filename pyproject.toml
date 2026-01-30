@@ -26,6 +26,7 @@ dependencies = [
 
   # kafka
   "confluent-kafka>=2.3",
+  "kafka-python>=2.0",
 
   # aws / redshift
   "boto3>=1.34",
