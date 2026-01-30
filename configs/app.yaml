@@ -1,0 +1,66 @@
+app:
+  name: redshift-streaming-analytics
+  environment: local
+
+kafka:
+  bootstrap_servers: "localhost:9092"
+  topics:
+    raw_query_metrics: "query_metrics_raw"
+    processed_query_metrics: "query_metrics_processed"
+  consumer_groups:
+    duckdb_writer: "duckdb-writer-group"
+    ui_stream: "ui-stream-group"
+
+replay:
+  time_scale_factor: 50
+  producer_batch_size: 500
+  max_events: null
+
+dataset:
+  source_url: "https://s3.amazonaws.com/redshift-downloads/redset/provisioned/sample_0.001.parquet"
+  format: parquet
+  event_time_column: arrival_timestamp
+  batch_read_size: 10000
+  enforce_event_time_order: true
+
+processing:
+  missing_values:
+    numeric_fill_value: 0
+    string_empty_as_null: true
+    normalize_strings: true
+    timestamp_invalid_action: drop
+
+  duplicates:
+    enabled: true
+    key_columns:
+      - query_id
+      - arrival_timestamp
+    ttl_seconds: 3600
+
+  inconsistencies:
+    clip_negative_durations: true
+    clip_negative_metrics: true
+    enforce_end_after_start: true
+    allowed_deployment_types:
+      - provisioned
+      - serverless
+      - unknown
+
+  enrichment:
+    compute_spill_pressure: true
+    compute_queue_flag: true
+    compute_duration_seconds: true
+
+storage:
+  duckdb:
+    path: "./data/analytics.duckdb"
+    tables:
+      processed: query_metrics_processed
+      rollups: query_metrics_rollups
+
+ui:
+  refresh_interval_seconds: 1
+  stream:
+    enabled: true
+    topic: "query_metrics_processed"
+    max_buffer_size: 1000

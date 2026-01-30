@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redshift-streaming-analytics"
+version = "0.1.0"
+description = "Streaming analytics for Redshift query metrics (overlap-aware rollups)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Your Name" }
+]
+
+dependencies = [
+  # core
+  "pyyaml>=6.0",
+  "pydantic>=2.5",
+  "python-dotenv>=1.0",
+
+  # data / analytics
+  "pandas>=2.1",
+  "pyarrow>=14.0",
+  "duckdb>=0.9",
+
+  # kafka
+  "confluent-kafka>=2.3",
+
+  # aws / redshift
+  "boto3>=1.34",
+  "psycopg2-binary>=2.9",
+
+  # ui
+  "streamlit>=1.30",
+
+  # misc
+  "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "ruff>=0.2",
+  "black>=24.1",
+  "mypy>=1.8",
+]
+
+[project.scripts]
+redshift-streaming = "src.main:cli"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+strict_optional = true
