@@ -146,6 +146,22 @@ def _render_analytics_panel(settings: Settings) -> None:
             )
 
             if not rdf.empty:
+                latest = rdf.tail(1).iloc[0]
+                k1, k2, k3, k4 = st.columns(4)
+                queries_per_min = int(latest["query_count"])
+                queued_count = int(round(queries_per_min * float(latest["queued_ratio"])))
+                k1.metric("Queries/min", f"{queries_per_min}")
+                k2.metric("Queued (est.)", f"{queued_count}")
+                k3.metric("Scanned (MB/min)", f"{latest['scanned_mb_sum']:.1f}")
+                k4.metric("Spill pressure", f"{latest['avg_spill_pressure']:.2f}")
+
+                s1, s2, s3, s4, s5 = st.columns(5)
+                s1.metric("Queue score", f"{latest['avg_queue_score']:.2f}")
+                s2.metric("Compile score", f"{latest['avg_compile_score']:.2f}")
+                s3.metric("Scan score", f"{latest['avg_scan_score']:.2f}")
+                s4.metric("Spill score", f"{latest['avg_spill_score']:.2f}")
+                s5.metric("Utilization", f"{latest['avg_utilization_score']:.2f}")
+
                 st.line_chart(
                     rdf.pivot(index="window_start", columns="deployment_type", values="avg_duration_seconds")
                 )

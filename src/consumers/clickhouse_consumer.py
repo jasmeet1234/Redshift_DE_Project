@@ -71,11 +71,40 @@ def _ensure_tables(client: ClickHouseClient, settings: Settings) -> None:
             query_count UInt64,
             avg_duration_seconds Float64,
             avg_spill_pressure Float64,
-            queued_ratio Float64
+            queued_ratio Float64,
+            scanned_mb_sum Float64,
+            spilled_mb_sum Float64,
+            avg_queue_score Float64,
+            avg_compile_score Float64,
+            avg_scan_score Float64,
+            avg_spill_score Float64,
+            avg_utilization_score Float64
         )
         ENGINE = MergeTree
         ORDER BY (dataset_type, window_start)
         """
+    )
+
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS scanned_mb_sum Float64"
+    )
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS spilled_mb_sum Float64"
+    )
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS avg_queue_score Float64"
+    )
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS avg_compile_score Float64"
+    )
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS avg_scan_score Float64"
+    )
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS avg_spill_score Float64"
+    )
+    client.command(
+        f"ALTER TABLE {rollups} ADD COLUMN IF NOT EXISTS avg_utilization_score Float64"
     )
 
 
@@ -177,12 +206,26 @@ def run_clickhouse_consumer(settings: Settings) -> None:
                     "duration_sum": 0.0,
                     "spill_sum": 0.0,
                     "queued_sum": 0.0,
+                    "scanned_sum": 0.0,
+                    "spilled_sum": 0.0,
+                    "queue_score_sum": 0.0,
+                    "compile_score_sum": 0.0,
+                    "scan_score_sum": 0.0,
+                    "spill_score_sum": 0.0,
+                    "util_score_sum": 0.0,
                 },
             )
             bucket["count"] += 1
             bucket["duration_sum"] += float(row["duration_seconds"])
             bucket["spill_sum"] += float(row["spill_pressure"])
             bucket["queued_sum"] += float(row["queued"])
+            bucket["scanned_sum"] += float(row["scanned_mb"])
+            bucket["spilled_sum"] += float(row["spilled_mb"])
+            bucket["queue_score_sum"] += float(row["queue_score"])
+            bucket["compile_score_sum"] += float(row["compile_score"])
+            bucket["scan_score_sum"] += float(row["scan_score"])
+            bucket["spill_score_sum"] += float(row["spill_score"])
+            bucket["util_score_sum"] += float(row["utilization_score"])
 
         rollup_columns = [
             "window_start",
@@ -191,6 +234,13 @@ def run_clickhouse_consumer(settings: Settings) -> None:
             "avg_duration_seconds",
             "avg_spill_pressure",
             "queued_ratio",
+            "scanned_mb_sum",
+            "spilled_mb_sum",
+            "avg_queue_score",
+            "avg_compile_score",
+            "avg_scan_score",
+            "avg_spill_score",
+            "avg_utilization_score",
         ]
         rollup_data = []
         for (window_start, dataset_type), agg in rollups_rows.items():
@@ -203,6 +253,13 @@ def run_clickhouse_consumer(settings: Settings) -> None:
                     agg["duration_sum"] / count if count else 0.0,
                     agg["spill_sum"] / count if count else 0.0,
                     agg["queued_sum"] / count if count else 0.0,
+                    agg["scanned_sum"],
+                    agg["spilled_sum"],
+                    agg["queue_score_sum"] / count if count else 0.0,
+                    agg["compile_score_sum"] / count if count else 0.0,
+                    agg["scan_score_sum"] / count if count else 0.0,
+                    agg["spill_score_sum"] / count if count else 0.0,
+                    agg["util_score_sum"] / count if count else 0.0,
                 ]
             )
         if rollup_data:

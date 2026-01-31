@@ -75,7 +75,14 @@ def fetch_rollups_last_minutes(
                 query_count,
                 avg_duration_seconds,
                 avg_spill_pressure,
-                queued_ratio
+                queued_ratio,
+                scanned_mb_sum,
+                spilled_mb_sum,
+                avg_queue_score,
+                avg_compile_score,
+                avg_scan_score,
+                avg_spill_score,
+                avg_utilization_score
             FROM {rollups_table}
             WHERE window_start >= now() - INTERVAL %(minutes)s MINUTE
               AND dataset_type = %(deployment_type)s
@@ -92,7 +99,14 @@ def fetch_rollups_last_minutes(
             query_count,
             avg_duration_seconds,
             avg_spill_pressure,
-            queued_ratio
+            queued_ratio,
+            scanned_mb_sum,
+            spilled_mb_sum,
+            avg_queue_score,
+            avg_compile_score,
+            avg_scan_score,
+            avg_spill_score,
+            avg_utilization_score
         FROM {rollups_table}
         WHERE window_start >= now() - INTERVAL %(minutes)s MINUTE
         ORDER BY window_start ASC
