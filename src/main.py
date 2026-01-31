@@ -12,6 +12,7 @@ from src.common.logging import setup_logging
 from src.common.settings import Settings
 from src.consumers.duckdb_consumer import run_duckdb_consumer
 from src.consumers.redshift_loader import run_redshift_consumer
+from src.consumers.clickhouse_consumer import run_clickhouse_consumer
 from src.producer.replay_producer import run_replay_producer
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,16 @@ def _resolve_input_path(input_path: Optional[str], source_url: Optional[str], se
         return source_url
     if input_path:
         return input_path
+    return settings.dataset.source_url
+
+
+def _resolve_dataset_url(settings: Settings, dataset_type: str) -> str:
+    # Prefer explicit dataset URLs when configured.
+    if settings.datasets:
+        if dataset_type == "provisioned":
+            return settings.datasets.provisioned_url
+        if dataset_type == "serverless":
+            return settings.datasets.serverless_url
     return settings.dataset.source_url
 
 
@@ -59,9 +70,16 @@ def cli(argv: Optional[list[str]] = None) -> int:
         dest="source_url",
         help="HTTP(S) parquet URL. Overrides --input if provided.",
     )
+    producer_parser.add_argument(
+        "--dataset-type",
+        choices=["provisioned", "serverless"],
+        default="provisioned",
+        help="Dataset type to tag events with (provisioned or serverless).",
+    )
 
     subparsers.add_parser("consumer-duckdb", help="Run the DuckDB consumer")
     subparsers.add_parser("consumer-redshift", help="Run the Redshift consumer")
+    subparsers.add_parser("consumer-clickhouse", help="Run the ClickHouse consumer")
     subparsers.add_parser("ui", help="Run the Streamlit UI")
 
     args = parser.parse_args(argv)
@@ -73,8 +91,21 @@ def cli(argv: Optional[list[str]] = None) -> int:
     logger.info("Working directory: %s", os.getcwd())
 
     if args.command == "producer":
-        input_path = _resolve_input_path(args.input_path, args.source_url, settings)
-        run_replay_producer(input_path, settings)
+        if args.input_path or args.source_url:
+            input_path = _resolve_input_path(args.input_path, args.source_url, settings)
+        else:
+            input_path = _resolve_dataset_url(settings, args.dataset_type)
+        topic = (
+            settings.kafka.topics.raw_query_metrics_provisioned
+            if args.dataset_type == "provisioned"
+            else settings.kafka.topics.raw_query_metrics_serverless
+        )
+        run_replay_producer(
+            input_path,
+            settings,
+            dataset_type=args.dataset_type,
+            topic_override=topic,
+        )
         return 0
 
     if args.command == "consumer-duckdb":
@@ -83,6 +114,10 @@ def cli(argv: Optional[list[str]] = None) -> int:
 
     if args.command == "consumer-redshift":
         run_redshift_consumer(settings)
+        return 0
+
+    if args.command == "consumer-clickhouse":
+        run_clickhouse_consumer(settings)
         return 0
 
     if args.command == "ui":

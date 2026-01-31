@@ -21,7 +21,10 @@ def main() -> None:
         st.markdown(f"**Kafka bootstrap:** `{settings.kafka.bootstrap_servers}`")
         st.markdown(f"**Processed topic:** `{settings.kafka.topics.processed_query_metrics}`")
         st.markdown(f"**UI stream topic:** `{settings.ui.stream.topic}`")
-        st.markdown(f"**DuckDB path:** `{settings.storage.duckdb.path}`")
+        st.markdown(
+            f"**ClickHouse:** `{settings.clickhouse.host}:{settings.clickhouse.port}` "
+            f"(db: `{settings.clickhouse.database}`)"
+        )
 
     st.info("Use the sidebar to open the Live Dashboard and other pages.")
 

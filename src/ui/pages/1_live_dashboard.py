@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src.common.settings import Settings
-from src.storage.duckdb_client import DuckDBClient
+from src.storage.clickhouse_client import ClickHouseClient
 from src.ui.components.queries import (
     fetch_distinct_deployment_types,
     fetch_recent_processed,
@@ -23,16 +23,10 @@ def _get_settings() -> Settings:
     return st.session_state["settings"]
 
 
-def _get_duckdb_ro(settings: Settings) -> DuckDBClient:
-    """
-    IMPORTANT (Windows): do NOT keep an open DuckDB connection in session_state.
-    Keep a lightweight client and open connections only for the duration of each query.
-    """
-    if "duckdb_ro" not in st.session_state:
-        st.session_state["duckdb_ro"] = DuckDBClient.from_settings(settings).as_read_only(
-            busy_timeout_ms=30_000
-        )
-    return st.session_state["duckdb_ro"]
+def _get_clickhouse(settings: Settings) -> ClickHouseClient:
+    if "clickhouse" not in st.session_state:
+        st.session_state["clickhouse"] = ClickHouseClient.from_settings(settings)
+    return st.session_state["clickhouse"]
 
 
 def _ensure_stream_objects(settings: Settings) -> None:
@@ -107,18 +101,18 @@ def _render_stream_panel(settings: Settings) -> None:
 
 
 def _render_analytics_panel(settings: Settings) -> None:
-    st.subheader("Stored Analytics (DuckDB)")
+    st.subheader("Stored Analytics (ClickHouse)")
 
-    db = _get_duckdb_ro(settings)
-    tables = settings.storage.duckdb.tables
+    db = _get_clickhouse(settings)
+    tables = settings.clickhouse.tables
     processed_table = tables["processed"]
-    rollups_table = tables["rollups"]
+    rollups_table = tables["rollups_minute"]
 
     deployment_types = ["all"]
     try:
         # Each call opens a short-lived read-only connection internally
         deployment_types += fetch_distinct_deployment_types(
-            db.connect(),
+            db,
             processed_table=processed_table,
         )
     except Exception:
@@ -129,32 +123,27 @@ def _render_analytics_panel(settings: Settings) -> None:
     left, right = st.columns(2)
 
     with left:
-        st.markdown("**Recent processed events (DuckDB)**")
+        st.markdown("**Recent processed events (ClickHouse)**")
         try:
-            # open/close per query to avoid Windows locks
-            with db.connect() as con:
-                rel = fetch_recent_processed(
-                    con,
-                    processed_table=processed_table,
-                    limit=500,
-                    deployment_type=deployment_filter,
-                )
-                df = rel.df()
+            df = fetch_recent_processed(
+                db,
+                processed_table=processed_table,
+                limit=500,
+                deployment_type=deployment_filter,
+            )
             st.dataframe(df, width="stretch", hide_index=True)
         except Exception as e:
-            st.info(f"No DuckDB data yet: {e}")
+            st.info(f"No ClickHouse data yet: {e}")
 
     with right:
         st.markdown("**Rollups (last 60 minutes)**")
         try:
-            with db.connect() as con:
-                rel = fetch_rollups_last_minutes(
-                    con,
-                    rollups_table=rollups_table,
-                    minutes=60,
-                    deployment_type=deployment_filter,
-                )
-                rdf = rel.df()
+            rdf = fetch_rollups_last_minutes(
+                db,
+                rollups_table=rollups_table,
+                minutes=60,
+                deployment_type=deployment_filter,
+            )
 
             if not rdf.empty:
                 st.line_chart(

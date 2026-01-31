@@ -32,6 +32,9 @@ dependencies = [
   "boto3>=1.34",
   "psycopg2-binary>=2.9",
 
+  # analytics store (ClickHouse)
+  "clickhouse-connect>=0.7",
+
   # ui
   "streamlit>=1.30",
 

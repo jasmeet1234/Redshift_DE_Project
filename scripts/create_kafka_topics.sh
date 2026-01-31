@@ -10,6 +10,10 @@ BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}"
 TOPICS=(
   "query_metrics_raw"
   "query_metrics_processed"
+  "query_metrics_raw_provisioned"
+  "query_metrics_raw_serverless"
+  "query_metrics_processed_provisioned"
+  "query_metrics_processed_serverless"
 )
 
 PARTITIONS="${KAFKA_PARTITIONS:-3}"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
+import threading
 import time
 from collections import OrderedDict
 from datetime import date, datetime
@@ -11,9 +13,7 @@ from typing import Any, Dict, Iterable, Optional, Union
 
 from kafka import KafkaProducer
 
-from src.common.schema import QueryMetricsEvent
 from src.common.settings import Settings
-from src.producer.metrics_calc import map_clean_enrich_row
 from src.producer.parquet_reader import ParquetReader
 
 logger = logging.getLogger(__name__)
@@ -99,91 +99,150 @@ class TTLKeyDeduper:
         return False
 
 
-def _iter_raw_rows(source: Union[str, Path], settings: Settings) -> Iterable[Dict[str, Any]]:
+def _iter_raw_rows(
+    source: Union[str, Path],
+    *,
+    event_time_col: str,
+    batch_size: int,
+    enforce_event_time_order: bool,
+) -> Iterable[Dict[str, Any]]:
     src = str(source)
     reader = ParquetReader(
         parquet_url=src,
-        event_time_col=settings.dataset.event_time_column,
-        batch_size=settings.dataset.batch_read_size,
-        enforce_event_time_order=settings.dataset.enforce_event_time_order,
+        event_time_col=event_time_col,
+        batch_size=batch_size,
+        enforce_event_time_order=enforce_event_time_order,
     )
     return reader
 
 
-def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> None:
+def _buffered_rows(rows: Iterable[Dict[str, Any]], max_size: int) -> Iterable[Dict[str, Any]]:
     """
-    Read Parquet rows (URL or local path), clean/enrich, dedupe, and publish to Kafka.
+    Buffer rows in a background thread to smooth over slow IO/bandwidth.
+    """
+    q: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue(maxsize=max_size)
+    sentinel = object()
 
-    Produces cleaned canonical events to:
-      - settings.kafka.topics.processed_query_metrics
+    def _worker() -> None:
+        try:
+            for row in rows:
+                q.put(row)
+        finally:
+            q.put(sentinel)  # type: ignore[arg-type]
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    while True:
+        item = q.get()
+        if item is sentinel:
+            break
+        yield item  # type: ignore[misc]
+
+
+def _parse_arrival_ts(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        from dateutil import parser as dt_parser
+
+        return dt_parser.parse(str(value))
+    except Exception:
+        return None
+
+
+def run_replay_producer(
+    input_path: Union[str, Path],
+    settings: Settings,
+    *,
+    dataset_type: str,
+    topic_override: Optional[str] = None,
+) -> None:
+    """
+    Read Parquet rows (URL or local path) and publish raw events to Kafka.
 
     Replay timing:
       - Uses event-time deltas (arrival_timestamp) scaled by settings.replay.time_scale_factor.
-        Example: factor=50 -> 50x speed-up (sleep = delta / 50).
+      - Uses a target_duration_seconds to maintain a 1-hour replay wall-clock budget.
     """
     topics = settings.kafka.topics
-    processed_topic = topics.processed_query_metrics
+    processed_topic = topic_override or topics.processed_query_metrics
 
     replay_factor = int(settings.replay.time_scale_factor)
     producer_batch_size = int(settings.replay.producer_batch_size)
     max_events = settings.replay.max_events
+    target_duration_s = int(settings.replay.target_duration_seconds)
 
-    proc_cfg = settings.processing
-
-    deduper: Optional[TTLKeyDeduper] = None
-    if proc_cfg.duplicates.enabled:
-        deduper = TTLKeyDeduper(
-            ttl_seconds=proc_cfg.duplicates.ttl_seconds,
-            max_size=max(50_000, producer_batch_size * 50),
-        )
+    dataset_cfg = settings.datasets or settings.dataset
 
     logger.info(
-        "Replay producer starting. source=%s processed_topic=%s replay_factor=%sx batch_read=%d batch_send=%d max_events=%s",
+        "Replay producer starting. source=%s topic=%s dataset=%s replay_factor=%sx batch_read=%d batch_send=%d max_events=%s target_duration_s=%d",
         str(input_path),
         processed_topic,
+        dataset_type,
         replay_factor,
-        settings.dataset.batch_read_size,
+        dataset_cfg.batch_read_size,
         producer_batch_size,
         str(max_events),
+        target_duration_s,
     )
 
     producer = _make_producer(settings)
 
     sent = 0
     last_arrival: Optional[datetime] = None
+    first_arrival: Optional[datetime] = None
+    wall_start: Optional[float] = None
     pending_futures = []
 
     try:
-        for raw in _iter_raw_rows(input_path, settings):
-            # 1) Clean + enrich into canonical event
-            try:
-                evt: QueryMetricsEvent = map_clean_enrich_row(raw, proc_cfg)
-            except Exception as e:
-                logger.debug("Dropping row due to mapping/cleaning error: %s | row_keys=%s", str(e), list(raw.keys()))
+        rows = _buffered_rows(
+            _iter_raw_rows(
+                input_path,
+                event_time_col=dataset_cfg.event_time_column,
+                batch_size=dataset_cfg.batch_read_size,
+                enforce_event_time_order=dataset_cfg.enforce_event_time_order,
+            ),
+            settings.replay.prefetch_rows,
+        )
+        for raw in rows:
+            arrival = _parse_arrival_ts(raw.get(dataset_cfg.event_time_column))
+            if arrival is None:
                 continue
 
-            # 2) Deduplicate if enabled
-            if deduper is not None:
-                key_cols = proc_cfg.duplicates.key_columns
-                key = tuple(getattr(evt, c) for c in key_cols if hasattr(evt, c))
-                now_ts = time.time()
-                if deduper.seen_or_add(key, now_ts):
-                    continue
+            # Replay timing (event-time based with a target wall-clock budget)
+            if first_arrival is None:
+                first_arrival = arrival
+                last_arrival = arrival
+                wall_start = time.time()
 
-            # 3) Replay timing (event-time based)
-            if replay_factor > 0:
-                if last_arrival is not None:
-                    delta = (evt.arrival_timestamp - last_arrival).total_seconds()
-                    if delta > 0:
-                        time.sleep(delta / float(replay_factor))
-                last_arrival = evt.arrival_timestamp
+            if last_arrival is not None and wall_start is not None and first_arrival is not None:
+                delta = (arrival - last_arrival).total_seconds()
+                if delta > 0 and replay_factor > 0:
+                    time.sleep(delta / float(replay_factor))
 
-            # 4) Publish to Kafka (processed stream)
-            fut = producer.send(processed_topic, evt.model_dump())
+                dataset_elapsed = (arrival - first_arrival).total_seconds()
+                target_wall_elapsed = dataset_elapsed / float(replay_factor)
+                now_wall_elapsed = time.time() - wall_start
+                if target_wall_elapsed > now_wall_elapsed:
+                    time.sleep(min(target_wall_elapsed - now_wall_elapsed, 1.0))
+
+                if dataset_elapsed >= target_duration_s:
+                    break
+
+            last_arrival = arrival
+
+            payload = dict(raw)
+            payload["dataset_type"] = dataset_type
+            payload.setdefault("deployment_type", dataset_type)
+
+            fut = producer.send(processed_topic, payload)
             pending_futures.append(fut)
             sent += 1
 
-            # 5) Backpressure + batching
+            # Backpressure + batching
             if len(pending_futures) >= producer_batch_size:
                 for f in pending_futures:
                     # raises on error
@@ -199,7 +258,7 @@ def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> Non
         pending_futures.clear()
 
         producer.flush()
-        logger.info("✅ Replay producer finished. sent=%d processed_topic=%s", sent, processed_topic)
+        logger.info("✅ Replay producer finished. sent=%d topic=%s dataset=%s", sent, processed_topic, dataset_type)
 
     finally:
         try:
