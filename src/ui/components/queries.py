@@ -2,37 +2,23 @@ from __future__ import annotations
 
 from typing import Optional
 
-import duckdb
-
-
-def _relation_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:
-    # DuckDB keeps tables/views in information_schema.tables
-    row = con.execute(
-        """
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_name = ?
-        LIMIT 1
-        """,
-        [name],
-    ).fetchone()
-    return row is not None
+from src.storage.clickhouse_client import ClickHouseClient
 
 
 def fetch_recent_processed(
-    con: duckdb.DuckDBPyConnection,
+    client: ClickHouseClient,
     *,
     processed_table: str,
     limit: int = 500,
     deployment_type: Optional[str] = None,
-) -> "duckdb.DuckDBPyRelation":
+) -> "object":
     if deployment_type and deployment_type != "all":
-        return con.execute(
+        return client.query_df(
             f"""
             SELECT
                 arrival_timestamp,
                 query_id,
-                deployment_type,
+                dataset_type AS deployment_type,
                 instance_id,
                 duration_seconds,
                 queue_duration_ms,
@@ -43,19 +29,19 @@ def fetch_recent_processed(
                 spill_pressure,
                 queued
             FROM {processed_table}
-            WHERE deployment_type = ?
+            WHERE dataset_type = %(deployment_type)s
             ORDER BY arrival_timestamp DESC
-            LIMIT ?
+            LIMIT %(limit)s
             """,
-            [deployment_type, limit],
+            params={"deployment_type": deployment_type, "limit": limit},
         )
 
-    return con.execute(
+    return client.query_df(
         f"""
         SELECT
             arrival_timestamp,
             query_id,
-            deployment_type,
+            dataset_type AS deployment_type,
             instance_id,
             duration_seconds,
             queue_duration_ms,
@@ -67,65 +53,65 @@ def fetch_recent_processed(
             queued
         FROM {processed_table}
         ORDER BY arrival_timestamp DESC
-        LIMIT ?
+        LIMIT %(limit)s
         """,
-        [limit],
+        params={"limit": limit},
     )
 
 
 def fetch_rollups_last_minutes(
-    con: duckdb.DuckDBPyConnection,
+    client: ClickHouseClient,
     *,
     rollups_table: str,
     minutes: int = 60,
     deployment_type: Optional[str] = None,
-) -> "duckdb.DuckDBPyRelation":
-    # Prefer always-up-to-date view if available
-    rollups_source = "v_rollups_minute" if _relation_exists(con, "v_rollups_minute") else rollups_table
-
+) -> "object":
     if deployment_type and deployment_type != "all":
-        return con.execute(
+        return client.query_df(
             f"""
             SELECT
                 window_start,
-                deployment_type,
+                dataset_type AS deployment_type,
                 query_count,
                 avg_duration_seconds,
                 avg_spill_pressure,
                 queued_ratio
-            FROM {rollups_source}
-            WHERE window_start >= now() - INTERVAL '{minutes} minutes'
-              AND deployment_type = ?
+            FROM {rollups_table}
+            WHERE window_start >= now() - INTERVAL %(minutes)s MINUTE
+              AND dataset_type = %(deployment_type)s
             ORDER BY window_start ASC
             """,
-            [deployment_type],
+            params={"deployment_type": deployment_type, "minutes": minutes},
         )
 
-    return con.execute(
+    return client.query_df(
         f"""
         SELECT
             window_start,
-            deployment_type,
+            dataset_type AS deployment_type,
             query_count,
             avg_duration_seconds,
             avg_spill_pressure,
             queued_ratio
-        FROM {rollups_source}
-        WHERE window_start >= now() - INTERVAL '{minutes} minutes'
+        FROM {rollups_table}
+        WHERE window_start >= now() - INTERVAL %(minutes)s MINUTE
         ORDER BY window_start ASC
-        """
+        """,
+        params={"minutes": minutes},
     )
 
 
 def fetch_distinct_deployment_types(
-    con: duckdb.DuckDBPyConnection,
+    client: ClickHouseClient,
     *,
     processed_table: str,
 ) -> list[str]:
-    rows = con.execute(f"SELECT DISTINCT deployment_type FROM {processed_table} ORDER BY 1").fetchall()
-    return [r[0] for r in rows]
+    df = client.query_df(
+        f"SELECT DISTINCT dataset_type AS deployment_type FROM {processed_table} ORDER BY 1"
+    )
+    return df["deployment_type"].tolist()
 
-SQL_HISTORICAL_DEPLOYMENT = """
+SQL_HISTORICAL_DEPLOYMENT_REDSHIFT = """
 SELECT
   date_trunc('hour', arrival_timestamp) AS window_start,
   deployment_type,
@@ -139,10 +125,24 @@ GROUP BY 1, 2
 ORDER BY window_start ASC;
 """
 
+SQL_HISTORICAL_DEPLOYMENT_CLICKHOUSE = """
+SELECT
+  toStartOfHour(arrival_timestamp) AS window_start,
+  dataset_type AS deployment_type,
+  COUNT(*) AS query_count,
+  AVG(duration_seconds) AS avg_duration_seconds,
+  AVG(spill_pressure) AS avg_spill_pressure,
+  AVG(CASE WHEN queued THEN 1 ELSE 0 END) AS queued_ratio
+FROM query_metrics_processed
+WHERE arrival_timestamp >= now() - INTERVAL 7 DAY
+GROUP BY 1, 2
+ORDER BY window_start ASC;
+"""
+
 SQL_TOP_QUERIES = """
 SELECT
   query_id,
-  deployment_type,
+  dataset_type AS deployment_type,
   COUNT(*) AS occurrences,
   AVG(duration_seconds) AS avg_duration_seconds,
   AVG(spill_pressure) AS avg_spill_pressure,

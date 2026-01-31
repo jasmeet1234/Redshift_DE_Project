@@ -164,8 +164,14 @@ def map_clean_enrich_row(row: Dict[str, Any], processing: ProcessingConfig) -> Q
     # ---- io/memory ----
     numeric_fill_float = float(mv.numeric_fill_value) if mv.numeric_fill_value is not None else 0.0
 
-    scanned_mb = _coerce_mb(_pick_first(row, "scanned_mb", "scan_mb", "scanned_megabytes"), numeric_fill_float)
-    spilled_mb = _coerce_mb(_pick_first(row, "spilled_mb", "spill_mb", "spilled_megabytes"), numeric_fill_float)
+    scanned_mb = _coerce_mb(
+        _pick_first(row, "scanned_mb", "scan_mb", "scanned_megabytes", "mbytes_scanned"),
+        numeric_fill_float,
+    )
+    spilled_mb = _coerce_mb(
+        _pick_first(row, "spilled_mb", "spill_mb", "spilled_megabytes", "mbytes_spilled"),
+        numeric_fill_float,
+    )
 
     if inc.clip_negative_metrics:
         scanned_mb = _clip_nonnegative_float(scanned_mb)
