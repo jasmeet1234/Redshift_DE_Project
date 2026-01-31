@@ -27,6 +27,7 @@ def _resolve_input_path(input_path: Optional[str], source_url: Optional[str], se
 
 
 def _resolve_dataset_url(settings: Settings, dataset_type: str) -> str:
+    # Prefer explicit dataset URLs when configured.
     if settings.datasets:
         if dataset_type == "provisioned":
             return settings.datasets.provisioned_url
