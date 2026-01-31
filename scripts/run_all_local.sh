@@ -5,8 +5,8 @@ set -euo pipefail
 # Run everything locally:
 #   - docker compose: zookeeper + kafka
 #   - create topics
-#   - bootstrap duckdb
-#   - run consumer-duckdb + (optional) consumer-redshift + ui + producer
+#   - bootstrap duckdb (optional legacy)
+#   - run consumer-clickhouse + (optional) consumer-redshift + ui + producer
 #
 # Producer source priority:
 #   1) --source-url <http(s)://...parquet>
@@ -20,6 +20,7 @@ set -euo pipefail
 #
 # Optional:
 #   ./scripts/run_all_local.sh --with-redshift
+#   ./scripts/run_all_local.sh --with-duckdb
 #   ./scripts/run_all_local.sh --no-ui
 #   ./scripts/run_all_local.sh --no-producer
 #   ./scripts/run_all_local.sh --no-consumers
@@ -34,6 +35,7 @@ export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 INPUT=""
 SOURCE_URL=""
 WITH_REDSHIFT="false"
+WITH_DUCKDB="false"
 NO_UI="false"
 NO_PRODUCER="false"
 NO_CONSUMERS="false"
@@ -52,6 +54,10 @@ while [[ $# -gt 0 ]]; do
       WITH_REDSHIFT="true"
       shift
       ;;
+    --with-duckdb)
+      WITH_DUCKDB="true"
+      shift
+      ;;
     --no-ui)
       NO_UI="true"
       shift
@@ -67,7 +73,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'EOF'
 Usage: ./scripts/run_all_local.sh [--source-url <parquet_http_url>] [--input <parquet_path_or_dir>]
-                                  [--with-redshift] [--no-ui] [--no-producer] [--no-consumers]
+                                  [--with-redshift] [--with-duckdb] [--no-ui] [--no-producer] [--no-consumers]
 
 If neither --source-url nor --input are provided, the producer uses dataset.source_url from configs/app.yaml.
 EOF
@@ -88,9 +94,13 @@ docker compose up -d
 echo "[2/5] Creating Kafka topics…"
 bash scripts/create_kafka_topics.sh
 
-echo "[3/5] Bootstrapping DuckDB…"
-# Prefer module invocation so imports are consistent
-python -m scripts.bootstrap_duckdb
+if [[ "${WITH_DUCKDB}" == "true" ]]; then
+  echo "[3/5] Bootstrapping DuckDB…"
+  # Prefer module invocation so imports are consistent
+  python -m scripts.bootstrap_duckdb
+else
+  echo "[3/5] Skipping DuckDB bootstrap (ClickHouse is primary analytics store)…"
+fi
 
 PIDS=()
 
@@ -120,7 +130,7 @@ run_bg() {
 echo "[4/5] Starting app processes…"
 
 if [[ "${NO_CONSUMERS}" == "false" ]]; then
-  run_bg "consumer_duckdb" python -m src.main consumer-duckdb
+  run_bg "consumer_clickhouse" python -m src.main consumer-clickhouse
 
   if [[ "${WITH_REDSHIFT}" == "true" ]]; then
     run_bg "consumer_redshift" python -m src.main consumer-redshift
@@ -139,14 +149,16 @@ if [[ "${NO_PRODUCER}" == "false" ]]; then
     PRODUCER_ARGS+=(--input "${INPUT}")
   fi
 
-  run_bg "producer" python -m src.main producer "${PRODUCER_ARGS[@]}"
+  run_bg "producer_provisioned" python -m src.main producer --dataset-type provisioned "${PRODUCER_ARGS[@]}"
+  run_bg "producer_serverless" python -m src.main producer --dataset-type serverless "${PRODUCER_ARGS[@]}"
 fi
 
 echo "[5/5] All services started."
 echo ""
 echo "Logs:"
-echo "  tail -f logs/consumer_duckdb.log"
-echo "  tail -f logs/producer.log"
+echo "  tail -f logs/consumer_clickhouse.log"
+echo "  tail -f logs/producer_provisioned.log"
+echo "  tail -f logs/producer_serverless.log"
 echo "  tail -f logs/ui.log"
 if [[ "${WITH_REDSHIFT}" == "true" ]]; then
   echo "  tail -f logs/consumer_redshift.log"

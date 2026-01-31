@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence
 
@@ -44,7 +45,22 @@ class DuckDBClient:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
         # read_only=True is important for UI processes
-        con = duckdb.connect(self.db_path, read_only=self.read_only)
+        if self.read_only:
+            deadline = time.time() + (self.busy_timeout_ms / 1000.0)
+            last_error: Exception | None = None
+            while True:
+                try:
+                    con = duckdb.connect(self.db_path, read_only=True)
+                    break
+                except duckdb.IOException as e:
+                    last_error = e
+                    if time.time() >= deadline:
+                        raise
+                    time.sleep(0.25)
+            if last_error:
+                logger.debug("Read-only DuckDB connection succeeded after retry: %s", last_error)
+        else:
+            con = duckdb.connect(self.db_path, read_only=False)
 
         # Wait for locks instead of failing immediately
         try:
