@@ -40,6 +40,16 @@ datasets:
   batch_read_size: 10000
   enforce_event_time_order: true
 
+datasets:
+  # For testing, use the 0.001 samples.
+  # To switch to full datasets, replace sample_0.001.parquet with full.parquet below.
+  provisioned_url: "https://s3.amazonaws.com/redshift-downloads/redset/provisioned/sample_0.001.parquet"
+  serverless_url: "https://s3.amazonaws.com/redshift-downloads/redset/serverless/sample_0.001.parquet"
+  format: parquet
+  event_time_column: arrival_timestamp
+  batch_read_size: 10000
+  enforce_event_time_order: true
+
 processing:
   missing_values:
     numeric_fill_value: 0
