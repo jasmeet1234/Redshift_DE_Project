@@ -76,11 +76,11 @@ storage:
       rollups: query_metrics_rollups
 
 clickhouse:
-  host: "localhost"
+  host: "${CLICKHOUSE_HOST:localhost}"
   port: 8123
-  database: "redshift_analytics"
-  user: "default"
-  password: ""
+  database: "${CLICKHOUSE_DATABASE:redshift_analytics}"
+  user: "${CLICKHOUSE_USER:default}"
+  password: "${CLICKHOUSE_PASSWORD:}"
   tables:
     processed: "query_metrics_processed"
     rollups_minute: "query_metrics_rollups_minute"

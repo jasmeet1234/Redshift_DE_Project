@@ -258,7 +258,7 @@ def run_replay_producer(
         pending_futures.clear()
 
         producer.flush()
-        logger.info("✅ Replay producer finished. sent=%d topic=%s dataset=%s", sent, processed_topic, dataset_type)
+        logger.info("Replay producer finished. sent=%d topic=%s dataset=%s", sent, processed_topic, dataset_type)
 
     finally:
         try:
