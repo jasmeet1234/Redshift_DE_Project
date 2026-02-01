@@ -36,19 +36,3 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-
-  clickhouse:
-    image: clickhouse/clickhouse-server:24.3
-    container_name: clickhouse
-    ports:
-      - "8123:8123"
-      - "9000:9000"
-    environment:
-      CLICKHOUSE_DB: redshift_analytics
-      CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10

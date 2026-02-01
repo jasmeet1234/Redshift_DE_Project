@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src.common.settings import Settings
-from src.storage.clickhouse_client import ClickHouseClient
+from src.storage.duckdb_client import DuckDBClient
 from src.ui.components.queries import (
     fetch_distinct_deployment_types,
     fetch_recent_processed,
@@ -23,10 +23,16 @@ def _get_settings() -> Settings:
     return st.session_state["settings"]
 
 
-def _get_clickhouse(settings: Settings) -> ClickHouseClient:
-    if "clickhouse" not in st.session_state:
-        st.session_state["clickhouse"] = ClickHouseClient.from_settings(settings)
-    return st.session_state["clickhouse"]
+def _get_duckdb_ro(settings: Settings) -> DuckDBClient:
+    """
+    IMPORTANT (Windows): do NOT keep an open DuckDB connection in session_state.
+    Keep a lightweight client and open connections only for the duration of each query.
+    """
+    if "duckdb_ro" not in st.session_state:
+        st.session_state["duckdb_ro"] = DuckDBClient.from_settings(settings).as_read_only(
+            busy_timeout_ms=30_000
+        )
+    return st.session_state["duckdb_ro"]
 
 
 def _ensure_stream_objects(settings: Settings) -> None:
@@ -101,18 +107,18 @@ def _render_stream_panel(settings: Settings) -> None:
 
 
 def _render_analytics_panel(settings: Settings) -> None:
-    st.subheader("Stored Analytics (ClickHouse)")
+    st.subheader("Stored Analytics (DuckDB)")
 
-    db = _get_clickhouse(settings)
-    tables = settings.clickhouse.tables
+    db = _get_duckdb_ro(settings)
+    tables = settings.storage.duckdb.tables
     processed_table = tables["processed"]
-    rollups_table = tables["rollups_minute"]
+    rollups_table = tables["rollups"]
 
     deployment_types = ["all"]
     try:
         # Each call opens a short-lived read-only connection internally
         deployment_types += fetch_distinct_deployment_types(
-            db,
+            db.connect(),
             processed_table=processed_table,
         )
     except Exception:
@@ -123,45 +129,34 @@ def _render_analytics_panel(settings: Settings) -> None:
     left, right = st.columns(2)
 
     with left:
-        st.markdown("**Recent processed events (ClickHouse)**")
+        st.markdown("**Recent processed events (DuckDB)**")
         try:
-            df = fetch_recent_processed(
-                db,
-                processed_table=processed_table,
-                limit=500,
-                deployment_type=deployment_filter,
-            )
+            # open/close per query to avoid Windows locks
+            with db.connect() as con:
+                rel = fetch_recent_processed(
+                    con,
+                    processed_table=processed_table,
+                    limit=500,
+                    deployment_type=deployment_filter,
+                )
+                df = rel.df()
             st.dataframe(df, width="stretch", hide_index=True)
         except Exception as e:
-            st.info(f"No ClickHouse data yet: {e}")
+            st.info(f"No DuckDB data yet: {e}")
 
     with right:
         st.markdown("**Rollups (last 60 minutes)**")
         try:
-            rdf = fetch_rollups_last_minutes(
-                db,
-                rollups_table=rollups_table,
-                minutes=60,
-                deployment_type=deployment_filter,
-            )
+            with db.connect() as con:
+                rel = fetch_rollups_last_minutes(
+                    con,
+                    rollups_table=rollups_table,
+                    minutes=60,
+                    deployment_type=deployment_filter,
+                )
+                rdf = rel.df()
 
             if not rdf.empty:
-                latest = rdf.tail(1).iloc[0]
-                k1, k2, k3, k4 = st.columns(4)
-                queries_per_min = int(latest["query_count"])
-                queued_count = int(round(queries_per_min * float(latest["queued_ratio"])))
-                k1.metric("Queries/min", f"{queries_per_min}")
-                k2.metric("Queued (est.)", f"{queued_count}")
-                k3.metric("Scanned (MB/min)", f"{latest['scanned_mb_sum']:.1f}")
-                k4.metric("Spill pressure", f"{latest['avg_spill_pressure']:.2f}")
-
-                s1, s2, s3, s4, s5 = st.columns(5)
-                s1.metric("Queue score", f"{latest['avg_queue_score']:.2f}")
-                s2.metric("Compile score", f"{latest['avg_compile_score']:.2f}")
-                s3.metric("Scan score", f"{latest['avg_scan_score']:.2f}")
-                s4.metric("Spill score", f"{latest['avg_spill_score']:.2f}")
-                s5.metric("Utilization", f"{latest['avg_utilization_score']:.2f}")
-
                 st.line_chart(
                     rdf.pivot(index="window_start", columns="deployment_type", values="avg_duration_seconds")
                 )

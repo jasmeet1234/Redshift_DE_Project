@@ -9,7 +9,7 @@ from src.common.settings import Settings
 from src.storage.redshift_client import RedshiftClient
 from src.ui.components.charts import line_chart_mb
 from src.ui.components.filters import deployment_filter
-from src.ui.components.queries import SQL_HISTORICAL_DEPLOYMENT_REDSHIFT
+from src.ui.components.queries import SQL_HISTORICAL_DEPLOYMENT
 
 
 st.set_page_config(page_title="Historical Dashboard", layout="wide")
@@ -62,7 +62,7 @@ def main() -> None:
             with conn.cursor() as cur:
                 # NOTE: SQL expects 4 params due to (%s='all' OR deployment_type=%s)
                 cur.execute(
-                    SQL_HISTORICAL_DEPLOYMENT_REDSHIFT,
+                    SQL_HISTORICAL_DEPLOYMENT,
                     (start_date, end_date, deployment, deployment),
                 )
                 cols = [c.name for c in cur.description]

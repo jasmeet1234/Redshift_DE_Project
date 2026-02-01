@@ -4,7 +4,7 @@ import streamlit as st
 from datetime import timedelta
 
 from src.common.settings import Settings
-from src.storage.clickhouse_client import ClickHouseClient
+from src.storage.duckdb_client import DuckDBClient
 from src.ui.components.filters import deployment_filter, time_window_filter
 
 st.set_page_config(page_title="Top Queries", layout="wide")
@@ -12,10 +12,10 @@ st.set_page_config(page_title="Top Queries", layout="wide")
 
 def main() -> None:
     settings = Settings.load()
-    db = ClickHouseClient.from_settings(settings)
+    db = DuckDBClient.from_settings(settings).as_read_only(busy_timeout_ms=30_000)
 
     st.header("🔎 Top Queries")
-    st.caption("Recent heavy queries (scan/spill/queue/compile) from ClickHouse processed events")
+    st.caption("Recent heavy queries (scan/spill/queue/compile) from DuckDB processed events")
 
     with st.sidebar:
         st.subheader("Filters")
@@ -31,22 +31,21 @@ def main() -> None:
         limit = st.slider("Top N", 10, 200, 50)
 
     # Use processed table (consumer writes there)
-    processed_table = settings.clickhouse.tables["processed"]
+    processed_table = settings.storage.duckdb.tables["processed"]
 
     # Anchor window using latest processed arrival_timestamp
-    latest_df = db.query_df(f"SELECT max(arrival_timestamp) AS latest FROM {processed_table}")
-    latest = latest_df["latest"].iloc[0] if not latest_df.empty else None
+    latest = db.fetchall(f"SELECT max(arrival_timestamp) FROM {processed_table}")[0][0]
     if latest is None:
         st.info("No data yet. Run the producer + consumer first.")
         return
 
     start_ts = latest - timedelta(minutes=window_minutes)
 
-    df = db.query_df(
+    df = db.fetchdf(
         f"""
         SELECT
           query_id,
-          dataset_type AS deployment_type,
+          deployment_type,
           COUNT(*) AS occurrences,
           AVG(duration_seconds) AS avg_duration_seconds,
           AVG(spill_pressure) AS avg_spill_pressure,
@@ -55,18 +54,13 @@ def main() -> None:
           SUM(scanned_mb) AS scanned_mb,
           SUM(spilled_mb) AS spilled_mb
         FROM {processed_table}
-        WHERE arrival_timestamp BETWEEN %(start_ts)s AND %(end_ts)s
-          AND (%(deployment)s = 'all' OR dataset_type = %(deployment)s)
-        GROUP BY query_id, dataset_type
+        WHERE arrival_timestamp BETWEEN ? AND ?
+          AND (? = 'all' OR deployment_type = ?)
+        GROUP BY query_id, deployment_type
         ORDER BY metric_value DESC, last_seen DESC
-        LIMIT %(limit)s
+        LIMIT ?
         """,
-        params={
-            "start_ts": start_ts,
-            "end_ts": latest,
-            "deployment": deployment,
-            "limit": limit,
-        },
+        params=[start_ts, latest, deployment, deployment, limit],
     )
 
     if df.empty:

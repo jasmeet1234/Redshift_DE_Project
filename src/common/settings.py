@@ -21,10 +21,6 @@ LOGGING_CONFIG_PATH = CONFIG_DIR / "logging.yaml"
 class KafkaTopicsConfig(BaseModel):
     raw_query_metrics: str = "query_metrics_raw"
     processed_query_metrics: str = "query_metrics_processed"
-    raw_query_metrics_provisioned: str = "query_metrics_raw_provisioned"
-    raw_query_metrics_serverless: str = "query_metrics_raw_serverless"
-    processed_query_metrics_provisioned: str = "query_metrics_processed_provisioned"
-    processed_query_metrics_serverless: str = "query_metrics_processed_serverless"
 
 
 class KafkaConfig(BaseModel):
@@ -62,21 +58,10 @@ class ReplayConfig(BaseModel):
     time_scale_factor: int = Field(default=50, gt=0)
     producer_batch_size: int = Field(default=500, gt=0)
     max_events: Optional[int] = Field(default=None, gt=0)
-    target_duration_seconds: int = Field(default=3600, gt=0)
-    prefetch_rows: int = Field(default=5000, gt=0)
 
 
 class DatasetConfig(BaseModel):
     source_url: str
-    format: str = Field(default="parquet", pattern=r"^parquet$")
-    event_time_column: str = "arrival_timestamp"
-    batch_read_size: int = Field(default=10000, gt=0)
-    enforce_event_time_order: bool = True
-
-
-class DatasetsConfig(BaseModel):
-    provisioned_url: str
-    serverless_url: str
     format: str = Field(default="parquet", pattern=r"^parquet$")
     event_time_column: str = "arrival_timestamp"
     batch_read_size: int = Field(default=10000, gt=0)
@@ -133,20 +118,6 @@ class StorageConfig(BaseModel):
     duckdb: DuckDBStorageConfig = Field(default_factory=DuckDBStorageConfig)
 
 
-class ClickHouseConfig(BaseModel):
-    host: str = "localhost"
-    port: int = Field(default=8123, gt=0)
-    database: str = "redshift_analytics"
-    user: str = "default"
-    password: str = ""
-    tables: Dict[str, str] = Field(
-        default_factory=lambda: {
-            "processed": "query_metrics_processed",
-            "rollups_minute": "query_metrics_rollups_minute",
-        }
-    )
-
-
 class UiStreamConfig(BaseModel):
     enabled: bool = True
     topic: str = "query_metrics_processed"
@@ -163,10 +134,8 @@ class Settings(BaseModel):
     kafka: KafkaConfig
     replay: ReplayConfig = Field(default_factory=ReplayConfig)
     dataset: DatasetConfig
-    datasets: Optional[DatasetsConfig] = None
     processing: ProcessingConfig = Field(default_factory=ProcessingConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
-    clickhouse: ClickHouseConfig = Field(default_factory=ClickHouseConfig)
     ui: UiConfig = Field(default_factory=UiConfig)
     logging: Dict[str, Any]
 
