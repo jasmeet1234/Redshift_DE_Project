@@ -142,7 +142,7 @@ ORDER BY window_start ASC;
 SQL_TOP_QUERIES = """
 SELECT
   query_id,
-  deployment_type,
+  dataset_type AS deployment_type,
   COUNT(*) AS occurrences,
   AVG(duration_seconds) AS avg_duration_seconds,
   AVG(spill_pressure) AS avg_spill_pressure,

@@ -114,9 +114,6 @@ def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> Non
     """
     Read Parquet rows (URL or local path), clean/enrich, dedupe, and publish to Kafka.
 
-    Produces cleaned canonical events to:
-      - settings.kafka.topics.processed_query_metrics
-
     Replay timing:
       - Uses event-time deltas (arrival_timestamp) scaled by settings.replay.time_scale_factor.
         Example: factor=50 -> 50x speed-up (sleep = delta / 50).
@@ -127,15 +124,6 @@ def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> Non
     replay_factor = int(settings.replay.time_scale_factor)
     producer_batch_size = int(settings.replay.producer_batch_size)
     max_events = settings.replay.max_events
-
-    proc_cfg = settings.processing
-
-    deduper: Optional[TTLKeyDeduper] = None
-    if proc_cfg.duplicates.enabled:
-        deduper = TTLKeyDeduper(
-            ttl_seconds=proc_cfg.duplicates.ttl_seconds,
-            max_size=max(50_000, producer_batch_size * 50),
-        )
 
     logger.info(
         "Replay producer starting. source=%s processed_topic=%s replay_factor=%sx batch_read=%d batch_send=%d max_events=%s",
@@ -152,6 +140,15 @@ def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> Non
     sent = 0
     last_arrival: Optional[datetime] = None
     pending_futures = []
+
+    proc_cfg = settings.processing
+
+    deduper: Optional[TTLKeyDeduper] = None
+    if proc_cfg.duplicates.enabled:
+        deduper = TTLKeyDeduper(
+            ttl_seconds=proc_cfg.duplicates.ttl_seconds,
+            max_size=max(50_000, producer_batch_size * 50),
+        )
 
     try:
         for raw in _iter_raw_rows(input_path, settings):
@@ -183,7 +180,7 @@ def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> Non
             pending_futures.append(fut)
             sent += 1
 
-            # 5) Backpressure + batching
+            # Backpressure + batching
             if len(pending_futures) >= producer_batch_size:
                 for f in pending_futures:
                     # raises on error
@@ -199,7 +196,7 @@ def run_replay_producer(input_path: Union[str, Path], settings: Settings) -> Non
         pending_futures.clear()
 
         producer.flush()
-        logger.info("✅ Replay producer finished. sent=%d processed_topic=%s", sent, processed_topic)
+        logger.info("Replay producer finished. sent=%d processed_topic=%s", sent, processed_topic)
 
     finally:
         try:
