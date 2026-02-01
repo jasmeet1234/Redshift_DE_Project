@@ -6,7 +6,6 @@ from datetime import timedelta
 from src.common.settings import Settings
 from src.storage.duckdb_client import DuckDBClient
 from src.ui.components.filters import deployment_filter, time_window_filter
-from src.ui.components.queries import SQL_TOP_QUERIES
 
 st.set_page_config(page_title="Top Queries", layout="wide")
 
@@ -42,15 +41,26 @@ def main() -> None:
 
     start_ts = latest - timedelta(minutes=window_minutes)
 
-    # If your SQL_TOP_QUERIES references query_metrics_raw, update it to use processed_table,
-    # or inject the table name here if SQL_TOP_QUERIES is a template.
-    sql = SQL_TOP_QUERIES
-    if "{table}" in sql:
-        sql = sql.format(table=processed_table)
-
     df = db.fetchdf(
-        sql,
-        params=[start_ts, latest, deployment, metric, limit],
+        f"""
+        SELECT
+          query_id,
+          deployment_type,
+          COUNT(*) AS occurrences,
+          AVG(duration_seconds) AS avg_duration_seconds,
+          AVG(spill_pressure) AS avg_spill_pressure,
+          MAX(arrival_timestamp) AS last_seen,
+          AVG({metric}) AS metric_value,
+          SUM(scanned_mb) AS scanned_mb,
+          SUM(spilled_mb) AS spilled_mb
+        FROM {processed_table}
+        WHERE arrival_timestamp BETWEEN ? AND ?
+          AND (? = 'all' OR deployment_type = ?)
+        GROUP BY query_id, deployment_type
+        ORDER BY metric_value DESC, last_seen DESC
+        LIMIT ?
+        """,
+        params=[start_ts, latest, deployment, deployment, limit],
     )
 
     if df.empty:
